@@ -51,6 +51,7 @@ export default function Index() {
 								</a>{' '}
 								guide file for how to get your project off the ground!
 							</p>
+							<p class="mx-auto mt-6 max-w-lg text-center text-xl text-white sm:max-w-3xl">V1.0.0 - 2023/10/13 14:19</p>
 						</div>
 					</div>
 				</div>
