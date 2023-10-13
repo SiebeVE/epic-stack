@@ -25,10 +25,13 @@ import {
 } from '@remix-run/react'
 import { withSentry } from '@sentry/remix'
 import { useRef } from 'react'
+import { AuthenticityTokenProvider } from 'remix-utils/csrf/react'
+import { HoneypotProvider } from 'remix-utils/honeypot/react'
 import { z } from 'zod'
 import { Confetti } from './components/confetti.tsx'
 import { GeneralErrorBoundary } from './components/error-boundary.tsx'
 import { ErrorList } from './components/forms.tsx'
+import { EpicProgress } from './components/progress-bar.tsx'
 import { SearchBar } from './components/search-bar.tsx'
 import { EpicToaster } from './components/toaster.tsx'
 import { Button } from './components/ui/button.tsx'
@@ -45,14 +48,11 @@ import tailwindStyleSheetUrl from './styles/tailwind.css'
 import { authenticator, getUserId } from './utils/auth.server.ts'
 import { ClientHintCheck, getHints, useHints } from './utils/client-hints.tsx'
 import { getConfetti } from './utils/confetti.server.ts'
+import { csrf } from './utils/csrf.server.ts'
 import { prisma } from './utils/db.server.ts'
 import { getEnv } from './utils/env.server.ts'
-import {
-	combineHeaders,
-	getDomainUrl,
-	getUserImgSrc,
-	invariantResponse,
-} from './utils/misc.tsx'
+import { honeypot } from './utils/honeypot.server.ts'
+import { combineHeaders, getDomainUrl, getUserImgSrc } from './utils/misc.tsx'
 import { useNonce } from './utils/nonce-provider.ts'
 import { useRequestInfo } from './utils/request-info.ts'
 import { type Theme, setTheme, getTheme } from './utils/theme.server.ts'
@@ -134,6 +134,8 @@ export async function loader({ request }: DataFunctionArgs) {
 	}
 	const { toast, headers: toastHeaders } = await getToast(request)
 	const { confettiId, headers: confettiHeaders } = getConfetti(request)
+	const honeyProps = honeypot.getInputProps()
+	const [csrfToken, csrfCookieHeader] = await csrf.commitToken()
 
 	return json(
 		{
@@ -149,12 +151,15 @@ export async function loader({ request }: DataFunctionArgs) {
 			ENV: getEnv(),
 			toast,
 			confettiId,
+			honeyProps,
+			csrfToken,
 		},
 		{
 			headers: combineHeaders(
 				{ 'Server-Timing': timings.toString() },
 				toastHeaders,
 				confettiHeaders,
+				csrfCookieHeader ? { 'set-cookie': csrfCookieHeader } : null,
 			),
 		},
 	)
@@ -173,16 +178,11 @@ const ThemeFormSchema = z.object({
 
 export async function action({ request }: DataFunctionArgs) {
 	const formData = await request.formData()
-	invariantResponse(
-		formData.get('intent') === 'update-theme',
-		'Invalid intent',
-		{ status: 400 },
-	)
 	const submission = parse(formData, {
 		schema: ThemeFormSchema,
 	})
 	if (submission.intent !== 'submit') {
-		return json({ status: 'success', submission } as const)
+		return json({ status: 'idle', submission } as const)
 	}
 	if (!submission.value) {
 		return json({ status: 'error', submission } as const, { status: 400 })
@@ -238,29 +238,31 @@ function App() {
 	const theme = useTheme()
 	const matches = useMatches()
 	const isOnSearchPage = matches.find(m => m.id === 'routes/users+/index')
+	const searchBar = isOnSearchPage ? null : <SearchBar status="idle" />
 
 	return (
 		<Document nonce={nonce} theme={theme} env={data.ENV}>
 			<div className="flex h-screen flex-col justify-between">
 				<header className="container py-6">
-					<nav className="flex items-center justify-between">
-						<Link to="/">
-							<div className="font-light">epic</div>
-							<div className="font-bold">notes</div>
-						</Link>
-						{isOnSearchPage ? null : (
-							<div className="ml-auto max-w-sm flex-1 pr-10">
-								<SearchBar status="idle" />
+					<nav>
+						<div className="flex flex-wrap items-center justify-between gap-4 sm:flex-nowrap md:gap-8">
+							<Link to="/">
+								<div className="font-light">epic</div>
+								<div className="font-bold">notes</div>
+							</Link>
+							<div className="ml-auto hidden max-w-sm flex-1 sm:block">
+								{searchBar}
 							</div>
-						)}
-						<div className="flex items-center gap-10">
-							{user ? (
-								<UserDropdown />
-							) : (
-								<Button asChild variant="default" size="sm">
-									<Link to="/login">Log In</Link>
-								</Button>
-							)}
+							<div className="flex items-center gap-10">
+								{user ? (
+									<UserDropdown />
+								) : (
+									<Button asChild variant="default" size="sm">
+										<Link to="/login">Log In</Link>
+									</Button>
+								)}
+							</div>
+							<div className="block w-full sm:hidden">{searchBar}</div>
 						</div>
 					</nav>
 				</header>
@@ -279,10 +281,23 @@ function App() {
 			</div>
 			<Confetti id={data.confettiId} />
 			<EpicToaster toast={data.toast} />
+			<EpicProgress />
 		</Document>
 	)
 }
-export default withSentry(App)
+
+function AppWithProviders() {
+	const data = useLoaderData<typeof loader>()
+	return (
+		<AuthenticityTokenProvider token={data.csrfToken}>
+			<HoneypotProvider {...data.honeyProps}>
+				<App />
+			</HoneypotProvider>
+		</AuthenticityTokenProvider>
+	)
+}
+
+export default withSentry(AppWithProviders)
 
 function UserDropdown() {
 	const user = useUser()
@@ -365,10 +380,7 @@ export function useTheme() {
  */
 export function useOptimisticThemeMode() {
 	const fetchers = useFetchers()
-
-	const themeFetcher = fetchers.find(
-		f => f.formData?.get('intent') === 'update-theme',
-	)
+	const themeFetcher = fetchers.find(f => f.formAction === '/')
 
 	if (themeFetcher && themeFetcher.formData) {
 		const submission = parse(themeFetcher.formData, {
@@ -384,9 +396,6 @@ function ThemeSwitch({ userPreference }: { userPreference?: Theme | null }) {
 	const [form] = useForm({
 		id: 'theme-switch',
 		lastSubmission: fetcher.data?.submission,
-		onValidate({ formData }) {
-			return parse(formData, { schema: ThemeFormSchema })
-		},
 	})
 
 	const optimisticMode = useOptimisticThemeMode()
@@ -416,8 +425,6 @@ function ThemeSwitch({ userPreference }: { userPreference?: Theme | null }) {
 			<input type="hidden" name="theme" value={nextMode} />
 			<div className="flex gap-2">
 				<button
-					name="intent"
-					value="update-theme"
 					type="submit"
 					className="flex h-8 w-8 cursor-pointer items-center justify-center"
 				>
