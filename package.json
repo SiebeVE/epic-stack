@@ -10,7 +10,8 @@
     "#*": "./*"
   },
   "scripts": {
-    "build": "run-s build:*",
+    "build": "npm ci && cp .env.example .env && npm run setup",
+    "build-prod": "run-s build:*",
     "build:icons": "tsx ./other/build-icons.ts",
     "build:remix": "remix build --sourcemap",
     "build:server": "tsx ./other/build-server.ts",
@@ -19,7 +20,7 @@
     "prisma:studio": "prisma studio",
     "format": "prettier --write .",
     "lint": "eslint .",
-    "setup": "npm run build-prod && prisma generate && prisma migrate deploy && prisma db seed && playwright install",
+    "setup": "npm run build-prod && prisma generate && prisma migrate deploy && prisma db seed",
     "serve": "npm run start",
     "start": "cross-env NODE_ENV=production node .",
     "start:mocks": "cross-env NODE_ENV=production MOCKS=true tsx .",
