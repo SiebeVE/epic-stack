@@ -67,6 +67,7 @@ export default function Index() {
 						</a>{' '}
 						file for how to get your project off the ground!
 					</p>
+					<p class="mx-auto mt-6 max-w-lg text-center text-xl text-white sm:max-w-3xl">V2.0.0 - 2024/09/07 11:35</p>
 				</div>
 				<ul className="mt-16 flex max-w-3xl flex-wrap justify-center gap-2 sm:gap-4 xl:mt-0 xl:grid xl:grid-flow-col xl:grid-cols-5 xl:grid-rows-6">
 					<TooltipProvider>
